@@ -4,7 +4,7 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue)](https://www.typescriptlang.org/)
 [![AI Native](https://img.shields.io/badge/AI--Native-CLAUDE.md%20%7C%20AGENTS.md-purple)](AGENTS.md)
-[![Status: design](https://img.shields.io/badge/status-design-orange)](docs/PRD.md)
+[![Status: phase 1 starter](https://img.shields.io/badge/status-phase%201%20starter-blue)](docs/STATUS.md)
 
 让 Claude Code 在你睡觉时自动消耗即将重置的订阅余量，帮你写书、补测试、修 bug——
 所有产出都隔离在独立分支，等你早上 review。
@@ -18,15 +18,20 @@
 
 ## 项目状态
 
-**设计阶段**。文档先行，后续在独立会话中开始实现。MVP 目标：6 周内自用可用，
-自用稳定 4 周后开源（见 [PRD §11](docs/PRD.md#11-路线图)）。
+**Phase 1 起步完成**。Watcher / TriggerEngine / Curator / Runner 主链路串通，
+`idleloop status` / `init` / `list` / `add` / `run --dry` 可用。
+
+下一步是 Phase 2（shift log + daemon + 真实 claude 联调）。
+完整状态见 [`docs/STATUS.md`](docs/STATUS.md)。
 
 ## 文档
 
 | 文件 | 用途 |
 |---|---|
+| [`docs/STATUS.md`](docs/STATUS.md) | **当前进度快照** — 新会话开始先读这一份 |
 | [`docs/PRD.md`](docs/PRD.md) | 需求文档：动机、目标、功能、验收标准 |
 | [`docs/TECH_DESIGN.md`](docs/TECH_DESIGN.md) | 技术框架：架构、模块、数据源、依赖 |
+| [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) | 实施计划：sprint 拆分 + 实测 OAuth schema + 风险 |
 | [`docs/NAMING.md`](docs/NAMING.md) | 命名探索：候选词与最终决策 |
 | [`AGENTS.md`](AGENTS.md) | 跨工具 AI 协作契约（写给所有 AI Agent） |
 | [`CLAUDE.md`](CLAUDE.md) | Claude Code 专属补充约定 |
