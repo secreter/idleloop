@@ -4,6 +4,13 @@
 
 @AGENTS.md
 
+## 项目当前进度（必读）
+
+本项目的进度快照、已知 gotcha、下一步建议都在 `docs/STATUS.md`。**新会话开始前必读**，
+通过下面这行 import 自动加载。
+
+@docs/STATUS.md
+
 ## Claude Code 专属补充
 
 ### 优先用的子能力
