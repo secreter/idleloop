@@ -2,7 +2,13 @@ import { appendFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ensureDir, paths } from '../storage/paths.js';
 import { logger as rootLogger } from '../utils/logger.js';
-import { fetchUsage, type OAuthClientOptions, type RawUsageResponse } from './oauth-client.js';
+import {
+  fetchUsage,
+  TokenInvalidError,
+  type OAuthClientOptions,
+  type RawUsageResponse,
+} from './oauth-client.js';
+import { refreshAccessToken, type RefreshOptions } from './refresh.js';
 import {
   isTokenExpired,
   loadToken,
@@ -20,6 +26,10 @@ export interface WatcherOptions {
   quotaJsonlPath?: string;
   /** 是否写历史，默认 true */
   persistHistory?: boolean;
+  /** OAuth refresh 配置；测试注入或自定义端点用 */
+  refresh?: RefreshOptions;
+  /** 401 是否走 refresh + retry，默认 true */
+  autoRefreshOn401?: boolean;
 }
 
 export interface PollHandlers {
@@ -45,14 +55,27 @@ export class Watcher {
   }
 
   async snapshot(): Promise<QuotaSnapshot> {
-    const token = await loadToken(this.opts.tokenSource ?? {});
-    if (isTokenExpired(token)) {
-      moduleLogger.warn(
+    let token = await loadToken(this.opts.tokenSource ?? {});
+    const autoRefresh = this.opts.autoRefreshOn401 !== false;
+    if (isTokenExpired(token) && autoRefresh) {
+      moduleLogger.info(
         { expiresAt: token.expiresAt.toISOString() },
-        'OAuth token near expiry; refresh flow not implemented yet (Phase 2)',
+        'OAuth token near expiry; pre-emptively refreshing',
       );
+      token = await tryRefreshToken(token, this.opts.refresh ?? {});
     }
-    const raw = await fetchUsage(token.accessToken, this.opts.oauth ?? {});
+    let raw: RawUsageResponse;
+    try {
+      raw = await fetchUsage(token.accessToken, this.opts.oauth ?? {});
+    } catch (err) {
+      if (err instanceof TokenInvalidError && autoRefresh && token.refreshToken) {
+        moduleLogger.warn('got 401 from usage endpoint; trying refresh + retry');
+        token = await tryRefreshToken(token, this.opts.refresh ?? {});
+        raw = await fetchUsage(token.accessToken, this.opts.oauth ?? {});
+      } else {
+        throw err;
+      }
+    }
     const snapshot = toSnapshot(raw, token);
     if (this.opts.persistHistory !== false) {
       await this.appendJsonl(snapshot);
@@ -152,6 +175,16 @@ function serializeWindow(w: QuotaWindow): {
     utilization_pct: w.utilizationPct,
     remaining_pct: w.remainingPct,
     resets_at: w.resetsAt != null ? w.resetsAt.toISOString() : null,
+  };
+}
+
+async function tryRefreshToken(current: TokenInfo, opts: RefreshOptions): Promise<TokenInfo> {
+  const refreshed = await refreshAccessToken(current, opts);
+  return {
+    ...current,
+    accessToken: refreshed.accessToken,
+    refreshToken: refreshed.refreshToken,
+    expiresAt: refreshed.expiresAt,
   };
 }
 

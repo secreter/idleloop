@@ -157,6 +157,33 @@ describe('Runner', () => {
     expect(result.errorMessage).toMatch(/exited with code 1/);
   });
 
+  it('confidence=auto_merge 成功后自动合入源仓库，worktree 被清理', async () => {
+    const claudeRunner = vi.fn().mockImplementation(async (opts: { worktreePath: string }) => {
+      await writeFile(path.join(opts.worktreePath, 'hello.txt'), 'hi\n');
+      return {
+        exitCode: 0,
+        totalInputTokens: 50,
+        totalOutputTokens: 20,
+        totalCostUsd: 0.01,
+        rawLog: '',
+      };
+    });
+    const runner = new Runner({ claudeRunner });
+    const result = await runner.execute(task({ confidence: 'auto_merge' }), {
+      sourceRepoDir: sourceRepo,
+    });
+    expect(result.status).toBe('success');
+    expect(result.confidence).toBe('auto_merge');
+
+    // worktree 已被清理
+    const { stat } = await import('node:fs/promises');
+    await expect(stat(result.worktreePath)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    // source repo 合并历史里出现 auto-merge
+    const { stdout } = await execa('git', ['log', '--oneline', '-5'], { cwd: sourceRepo });
+    expect(stdout).toMatch(/idleloop auto-merge:/);
+  });
+
   it('createWorktree 失败时 status=error，错误消息明确', async () => {
     const nonRepo = await mkdtemp(path.join(tmpdir(), 'idleloop-nonrepo-'));
     try {

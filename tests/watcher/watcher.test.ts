@@ -143,6 +143,96 @@ describe('Watcher', () => {
     expect(fetchFn.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
+  it('401 触发 auto-refresh + retry，成功拿到 snapshot', async () => {
+    let usageCallCount = 0;
+    const oauthFetch = vi.fn().mockImplementation(() => {
+      usageCallCount++;
+      if (usageCallCount === 1) {
+        return Promise.resolve(new Response('unauthorized', { status: 401 }));
+      }
+      return Promise.resolve(
+        jsonResponse({
+          five_hour: { utilization: 20, resets_at: '2026-05-13T03:00:00Z' },
+          seven_day: { utilization: 50, resets_at: '2026-05-20T03:00:00Z' },
+        }),
+      );
+    });
+    const refreshFetch = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        jsonResponse({
+          access_token: 'fresh-' + 'a'.repeat(80),
+          refresh_token: 'fresh-rt-' + 'b'.repeat(80),
+          expires_in: 3600,
+        }),
+      ),
+    );
+    const w = new Watcher({
+      oauth: { fetchFn: oauthFetch, maxRetries: 1, initialBackoffMs: 1 },
+      refresh: { fetchFn: refreshFetch, dryRun: true },
+      persistHistory: false,
+    });
+    const s = await w.snapshot();
+    expect(s.fiveHour.utilizationPct).toBe(20);
+    expect(refreshFetch).toHaveBeenCalledTimes(1);
+    expect(usageCallCount).toBe(2);
+  });
+
+  it('autoRefreshOn401=false 时 401 直接抛出，不走 refresh', async () => {
+    const oauthFetch = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(new Response('unauthorized', { status: 401 })));
+    const refreshFetch = vi.fn();
+    const w = new Watcher({
+      oauth: { fetchFn: oauthFetch, maxRetries: 1, initialBackoffMs: 1 },
+      refresh: { fetchFn: refreshFetch, dryRun: true },
+      autoRefreshOn401: false,
+      persistHistory: false,
+    });
+    await expect(w.snapshot()).rejects.toThrow(/401/);
+    expect(refreshFetch).not.toHaveBeenCalled();
+  });
+
+  it('token 即将过期：在拉 usage 前先 refresh', async () => {
+    // 重置 credentials：expiresAt 已经过期
+    await writeFile(
+      path.join(testHome, '.claude', '.credentials.json'),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: 'a'.repeat(80),
+          refreshToken: 'b'.repeat(80),
+          expiresAt: Date.now() - 60_000,
+          scopes: [],
+          subscriptionType: 'max',
+          rateLimitTier: 'default_claude_max_20x',
+        },
+      }),
+    );
+    const oauthFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        five_hour: { utilization: 10, resets_at: null },
+        seven_day: { utilization: 10, resets_at: null },
+      }),
+    );
+    const refreshFetch = vi.fn().mockResolvedValue(
+      jsonResponse({
+        access_token: 'fresh-' + 'a'.repeat(80),
+        refresh_token: 'fresh-rt-' + 'b'.repeat(80),
+        expires_in: 3600,
+      }),
+    );
+    const w = new Watcher({
+      oauth: { fetchFn: oauthFetch },
+      refresh: { fetchFn: refreshFetch, dryRun: true },
+      persistHistory: false,
+    });
+    const s = await w.snapshot();
+    expect(refreshFetch).toHaveBeenCalledTimes(1);
+    expect(s.fiveHour.utilizationPct).toBe(10);
+    // oauth fetch 应该带上新 token
+    const headers = (oauthFetch.mock.calls[0]![1] as { headers: Record<string, string> }).headers;
+    expect(headers['Authorization']).toContain('fresh-');
+  });
+
   it('startPolling 间隔 < 1000 抛错', () => {
     const w = new Watcher({ persistHistory: false });
     expect(() => w.startPolling(500, { onUpdate: () => {} })).toThrow(/>= 1000/);

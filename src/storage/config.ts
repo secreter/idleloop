@@ -77,6 +77,11 @@ const RunnerSchema = z
     claude_cli_path: z.string().default('claude'),
     default_max_budget_usd: z.number().positive().default(1.0),
     per_task_timeout_minutes: z.number().int().positive().default(45),
+    /** 单次 shift（一轮 daemon 唤醒）所有任务的累计美元上限。超过则丢弃后续任务。 */
+    max_shift_usd: z.number().positive().default(5.0),
+    /** 严格模式：task.working_dir 必须命中 projects[].dir 之一。
+     *  false 时（默认 true）允许任意路径，更宽松。 */
+    require_declared_project_dir: z.boolean().default(true),
   })
   .default({
     max_concurrent_tasks: 1,
@@ -85,6 +90,8 @@ const RunnerSchema = z
     claude_cli_path: 'claude',
     default_max_budget_usd: 1.0,
     per_task_timeout_minutes: 45,
+    max_shift_usd: 5.0,
+    require_declared_project_dir: true,
   });
 
 const LoggingSchema = z
@@ -144,6 +151,8 @@ runner:
   claude_cli_path: "claude"
   default_max_budget_usd: 1.0       # 单任务硬性美元上限
   per_task_timeout_minutes: 45
+  max_shift_usd: 5.0                # 单次 idle session 所有任务的累计 $ 上限
+  require_declared_project_dir: true  # task.working_dir 必须命中 projects[].dir
 
 # 项目列表：T3 嗅探策略会扫描这些目录
 projects: []

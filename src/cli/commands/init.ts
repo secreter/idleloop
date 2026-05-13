@@ -1,7 +1,10 @@
+import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { ensureDir, paths } from '../../storage/paths.js';
 import { writeDefaultConfig } from '../../storage/config.js';
 import { fetchProfile, TokenInvalidError } from '../../watcher/oauth-client.js';
 import { loadToken, TokenSourceError } from '../../watcher/token-source.js';
+import { EXAMPLE_TASK_MD } from './task-template.js';
 
 export interface InitOptions {
   force?: boolean;
@@ -14,6 +17,8 @@ export interface InitResult {
   directoriesCreated: string[];
   authenticatedAs?: string;
   warnings: string[];
+  exampleTaskPath?: string;
+  exampleTaskCreated?: boolean;
 }
 
 /**
@@ -43,6 +48,19 @@ export async function runInit(opts: InitOptions = {}): Promise<InitResult> {
   }
 
   const cfg = await writeDefaultConfig({ overwrite: opts.force ?? false });
+
+  // 写一份 example task md，让用户第一眼有可改的模板
+  const examplePath = path.join(paths.queueDir(), 'example.md.template');
+  let exampleCreated = false;
+  try {
+    const { readFile } = await import('node:fs/promises');
+    await readFile(examplePath, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      await writeFile(examplePath, EXAMPLE_TASK_MD, { mode: 0o600 });
+      exampleCreated = true;
+    }
+  }
 
   let authenticatedAs: string | undefined;
   if (!opts.skipVerify) {
@@ -80,5 +98,7 @@ export async function runInit(opts: InitOptions = {}): Promise<InitResult> {
     directoriesCreated: created,
     ...(authenticatedAs !== undefined ? { authenticatedAs } : {}),
     warnings,
+    exampleTaskPath: examplePath,
+    exampleTaskCreated: exampleCreated,
   };
 }

@@ -52,6 +52,9 @@ export class Runner {
       const finishedAt = new Date();
       return {
         taskId: task.id,
+        taskTitle: task.title,
+        sourceRepoDir: task.working_dir,
+        confidence: task.confidence,
         status: 'dry_run',
         branchName: tentativeBranch,
         worktreePath: tentativeWorktree,
@@ -78,6 +81,7 @@ export class Runner {
     let claudeTokens = 0;
     let safety: SafetyCheckResult | undefined;
     let verify: VerifyResult | undefined;
+    let autoMerged = false;
     try {
       const runFn = this.opts.claudeRunner ?? runClaude;
       const claudeResult = await runFn({
@@ -99,6 +103,7 @@ export class Runner {
           claudeCost,
           0,
           0,
+          false,
           `claude exited with code ${claudeResult.exitCode}`,
         );
       }
@@ -110,7 +115,7 @@ export class Runner {
             ? 'aborted_oversized'
             : safety.reason === 'forbidden_path'
               ? 'aborted_forbidden_path'
-              : 'aborted_oversized'; // lockfile 也算 oversized-like
+              : 'aborted_oversized'; // lockfile 走 oversized 桶；具体原因在 detail 里
         await removeWorktree(handle, { force: true, deleteBranch: true });
         return finalize(
           task,
@@ -121,6 +126,7 @@ export class Runner {
           claudeCost,
           safety.diff.filesChanged,
           safety.diff.insertions + safety.diff.deletions,
+          false,
           safety.detail,
         );
       }
@@ -141,6 +147,7 @@ export class Runner {
           claudeCost,
           safety.diff.filesChanged,
           safety.diff.insertions + safety.diff.deletions,
+          false,
           undefined,
           verify.output,
         );
@@ -149,12 +156,13 @@ export class Runner {
       // 成功：commit 改动并保留 worktree 等 review
       const git = simpleGit({ baseDir: handle.worktreePath });
       await git.add('.');
-      // diffSummary 之后再检测一遍：可能 git add 了 0 个文件（claude 没改任何东西）
       const status = await git.status();
       if (status.staged.length > 0) {
-        await git.commit(`idleloop: ${task.title}`, undefined, {
-          '--allow-empty': null,
-        });
+        await git.commit(`idleloop: ${task.title}`);
+      }
+      // auto_merge：低风险任务直接合入源仓库，不进 review queue
+      if (task.confidence === 'auto_merge' && status.staged.length > 0) {
+        autoMerged = await tryAutoMerge(task, handle);
       }
       return finalize(
         task,
@@ -165,6 +173,7 @@ export class Runner {
         claudeCost,
         safety.diff.filesChanged,
         safety.diff.insertions + safety.diff.deletions,
+        autoMerged,
         undefined,
         verify.output,
       );
@@ -183,9 +192,68 @@ export class Runner {
         claudeCost,
         safety?.diff.filesChanged ?? 0,
         safety ? safety.diff.insertions + safety.diff.deletions : 0,
+        false,
         (err as Error).message,
       );
     }
+  }
+}
+
+/**
+ * auto-merge 安全合入：
+ *   1. 检查源仓库工作树是否干净（含 untracked）
+ *   2. checkout 到 baseBranch（避免合到用户当前 work-in-progress 分支）
+ *   3. git merge --no-ff <branch>
+ *   4. 成功 → removeWorktree（force=false）+ 删分支
+ *
+ * 任何一步失败：log.warn 并返回 false，让 worktree 留下来给手动 review。
+ */
+async function tryAutoMerge(task: Task, handle: WorktreeHandle): Promise<boolean> {
+  try {
+    const sourceGit = simpleGit({ baseDir: handle.sourceRepoDir });
+    const status = await sourceGit.status();
+    if (!status.isClean()) {
+      log.warn(
+        {
+          taskId: task.id,
+          dirtyFiles: status.modified.length + status.not_added.length + status.deleted.length,
+        },
+        'auto-merge skipped: source repo working tree not clean',
+      );
+      return false;
+    }
+    const current = (await sourceGit.revparse(['--abbrev-ref', 'HEAD'])).trim();
+    if (current !== handle.baseBranch) {
+      // 切换到 baseBranch 再合
+      await sourceGit.checkout(handle.baseBranch);
+    }
+    const safeTitle = task.title.slice(0, 80);
+    await sourceGit.raw([
+      'merge',
+      '--no-ff',
+      '-m',
+      `idleloop auto-merge: ${safeTitle}`,
+      handle.branchName,
+    ]);
+    // 如果先前用户在别的分支，切回去
+    if (current !== handle.baseBranch) {
+      await sourceGit.checkout(current).catch(() => {
+        // 切回去失败不致命；记录即可
+        log.warn(
+          { taskId: task.id, original: current },
+          'auto-merge: failed to restore original branch after merge',
+        );
+      });
+    }
+    await removeWorktree(handle, { force: false, deleteBranch: true });
+    log.info({ taskId: task.id, branch: handle.branchName }, 'auto-merged');
+    return true;
+  } catch (err) {
+    log.warn(
+      { taskId: task.id, err: (err as Error).message },
+      'auto-merge failed; worktree kept for manual review',
+    );
+    return false;
   }
 }
 
@@ -201,6 +269,10 @@ function errorResult(
   const finishedAt = new Date();
   return {
     taskId: task.id,
+    taskTitle: task.title,
+    sourceRepoDir: task.working_dir,
+    confidence: task.confidence,
+    autoMerged: false,
     status: 'error',
     branchName: branch,
     worktreePath,
@@ -224,12 +296,18 @@ function finalize(
   cost: number,
   filesChanged: number,
   diffLines: number,
+  autoMerged: boolean,
   errorMessage?: string,
   verifyOutput?: string,
 ): TaskResult {
   const finishedAt = new Date();
   return {
     taskId: task.id,
+    taskTitle: task.title,
+    sourceRepoDir: handle.sourceRepoDir,
+    baseBranch: handle.baseBranch,
+    confidence: task.confidence,
+    autoMerged,
     status,
     branchName: handle.branchName,
     worktreePath: handle.worktreePath,
