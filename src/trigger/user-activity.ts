@@ -47,7 +47,9 @@ async function walk(
     const full = path.join(dir, ent.name);
     try {
       const st = await stat(full);
-      visit(st.mtimeMs);
+      // 只把文件 mtime 计入"最近活动"。目录 mtime 会因为新增/删除条目被刷新到 now，
+      // 导致刚 mkdtemp 出来的空架子也算最新活动，把判断带偏。
+      if (st.isFile()) visit(st.mtimeMs);
       if (ent.isDirectory() && depth < maxDepth) {
         await walk(full, depth + 1, maxDepth, visit);
       }

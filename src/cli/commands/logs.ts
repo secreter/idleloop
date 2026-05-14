@@ -19,6 +19,8 @@ export interface RunLogsOptions {
   recent?: number;
   /** machine-readable */
   json?: boolean;
+  /** 默认折叠 blocked-only 的 shift；传 true 全部展开 */
+  includeBlocked?: boolean;
 }
 
 export interface RunLogsDeps {
@@ -96,7 +98,7 @@ export async function runLogs(
       if (opts.json) {
         print(JSON.stringify({ date, shifts: [latest] }, null, 2));
       } else {
-        printShifts(date, [latest], print);
+        printShifts(date, [latest], print, { includeBlocked: opts.includeBlocked === true });
       }
       return { shifts: [latest], availableDates, date };
     }
@@ -106,7 +108,7 @@ export async function runLogs(
   if (opts.json) {
     print(JSON.stringify({ date, shifts }, null, 2));
   } else {
-    printShifts(date, shifts, print);
+    printShifts(date, shifts, print, { includeBlocked: opts.includeBlocked === true });
   }
   return { shifts, availableDates, date };
 }
@@ -162,21 +164,55 @@ function printList(rows: DateOverview[], print: (s: string) => void): void {
   }
 }
 
-function printShifts(date: string, shifts: ShiftState[], print: (s: string) => void): void {
-  print(styleText('bold', `Shifts on ${date} (${shifts.length})`));
+function printShifts(
+  date: string,
+  shifts: ShiftState[],
+  print: (s: string) => void,
+  opts: { includeBlocked: boolean } = { includeBlocked: false },
+): void {
+  const triggered = shifts.filter((s) => s.decision.triggered);
+  const blocked = shifts.filter((s) => !s.decision.triggered);
+
+  // 顶部 roll-up：一眼看清今天/这一天的核心数字
+  let okTasks = 0;
+  let failTasks = 0;
+  let totalCost = 0;
+  let totalTokens = 0;
   for (const s of shifts) {
+    totalCost += s.totalCostUsd;
+    totalTokens += s.totalTokens;
+    for (const r of s.results) {
+      if (r.status === 'success') okTasks++;
+      else if (r.status !== 'dry_run') failTasks++;
+    }
+  }
+  print(
+    styleText(
+      'bold',
+      `Shifts on ${date}  ·  ${shifts.length} total / ${triggered.length} triggered / ${blocked.length} blocked  ·  ${okTasks} ok-tasks${failTasks > 0 ? ` / ${failTasks} failed` : ''}  ·  $${totalCost.toFixed(4)}  ·  ${totalTokens} tokens`,
+    ),
+  );
+
+  // 默认隐藏 blocked-only shift（白天 96 次 poll 不污染输出）。
+  // 没有 triggered shift 时退化为全展开，避免空表。
+  const showBlocked = opts.includeBlocked || triggered.length === 0;
+  const shownShifts = showBlocked ? shifts : triggered;
+
+  for (const s of shownShifts) {
     const triggerTag = s.decision.triggered
       ? styleText('green', '✓ TRIGGER')
       : styleText('yellow', `✗ SKIP[${s.decision.blockedBy ?? 'n/a'}]`);
     print('');
     print(`  ${triggerTag}  ${s.shiftId}  ${shiftClock(s.startedAt, s.finishedAt)}`);
     print(styleText('dim', `    reason: ${s.decision.reason}`));
-    print(
-      styleText(
-        'dim',
-        `    tasks: ${s.results.length}  cost: $${s.totalCostUsd.toFixed(4)}  tokens: ${s.totalTokens}`,
-      ),
-    );
+    if (s.results.length > 0 || s.decision.triggered) {
+      print(
+        styleText(
+          'dim',
+          `    tasks: ${s.results.length}  cost: $${s.totalCostUsd.toFixed(4)}  tokens: ${s.totalTokens}`,
+        ),
+      );
+    }
     for (const r of s.results) {
       const color =
         r.status === 'success'
@@ -184,13 +220,24 @@ function printShifts(date: string, shifts: ShiftState[], print: (s: string) => v
           : r.status === 'verify_failed' ||
               r.status === 'aborted_oversized' ||
               r.status === 'aborted_budget' ||
-              r.status === 'aborted_forbidden_path'
+              r.status === 'aborted_forbidden_path' ||
+              r.status === 'aborted_secret_leak'
             ? styleText('yellow', '!')
             : r.status === 'error'
               ? styleText('red', '✗')
               : styleText('cyan', '·');
       print(`      ${color} [${r.status}] ${r.taskId}  (${r.diffLinesChanged}L diff)`);
     }
+  }
+
+  if (!showBlocked && blocked.length > 0) {
+    print('');
+    print(
+      styleText(
+        'dim',
+        `  · ${blocked.length} blocked shift(s) hidden — pass --include-blocked to see them`,
+      ),
+    );
   }
 }
 

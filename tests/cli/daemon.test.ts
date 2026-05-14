@@ -116,9 +116,101 @@ describe('runDaemonStatus + runDaemonUnit', () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'idleloop-daemon-st-'));
     const out: string[] = [];
     try {
-      const r = await runDaemonStatus({ pidFile: `${dir}/daemon.pid`, print: (s) => out.push(s) });
+      const r = await runDaemonStatus({
+        pidFile: `${dir}/daemon.pid`,
+        print: (s) => out.push(s),
+        configLoader: async () => parseConfig({}),
+        loadLatestShift: async () => null,
+        now: () => new Date(2026, 4, 13, 3, 0, 0),
+      });
       expect(r.running).toBe(false);
       expect(out.join('\n')).toMatch(/not running/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('status 在 quiet_hours 内：gate 行显示 quiet_hours active + lifts at', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'idleloop-daemon-st-'));
+    const out: string[] = [];
+    try {
+      // 默认 quiet 8-22，中午 12 点必在区间
+      const noon = new Date(2026, 4, 13, 12, 0, 0);
+      await runDaemonStatus({
+        pidFile: `${dir}/daemon.pid`,
+        print: (s) => out.push(s),
+        configLoader: async () => parseConfig({}),
+        loadLatestShift: async () => null,
+        now: () => noon,
+      });
+      expect(out.join('\n')).toMatch(/quiet_hours active/);
+      expect(out.join('\n')).toMatch(/22:00/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('status 在 quiet_hours 外：gate 行显示 open', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'idleloop-daemon-st-'));
+    const out: string[] = [];
+    try {
+      const night = new Date(2026, 4, 13, 3, 0, 0);
+      await runDaemonStatus({
+        pidFile: `${dir}/daemon.pid`,
+        print: (s) => out.push(s),
+        configLoader: async () => parseConfig({}),
+        loadLatestShift: async () => null,
+        now: () => night,
+      });
+      expect(out.join('\n')).toMatch(/gate:.*open/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('status 含 last shift 概览', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'idleloop-daemon-st-'));
+    const out: string[] = [];
+    try {
+      const now = new Date(2026, 4, 13, 3, 0, 0);
+      const startedAt = new Date(now.getTime() - 30 * 60_000);
+      await runDaemonStatus({
+        pidFile: `${dir}/daemon.pid`,
+        print: (s) => out.push(s),
+        configLoader: async () => parseConfig({}),
+        loadLatestShift: async () => ({
+          shiftId: 'shift-XYZ',
+          date: '2026-05-13',
+          startedAt: startedAt.toISOString(),
+          finishedAt: now.toISOString(),
+          decision: { triggered: true, reason: 'ok' },
+          snapshot: null,
+          results: [
+            {
+              taskId: 't1',
+              status: 'success',
+              branchName: 'b',
+              worktreePath: '/x',
+              tokensSpent: 100,
+              costUsd: 0.5,
+              durationMs: 1000,
+              diffLinesChanged: 1,
+              filesChanged: 1,
+              startedAt: startedAt.toISOString(),
+              finishedAt: now.toISOString(),
+            },
+          ],
+          strategies: [],
+          totalCostUsd: 0.5,
+          totalTokens: 100,
+        }),
+        now: () => now,
+      });
+      const all = out.join('\n');
+      expect(all).toMatch(/last shift/);
+      expect(all).toMatch(/triggered/);
+      expect(all).toMatch(/1 ok/);
+      expect(all).toMatch(/\$0\.50/);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

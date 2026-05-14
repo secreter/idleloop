@@ -177,6 +177,100 @@ describe('runRun', () => {
     expect(summary.results).toHaveLength(1);
   });
 
+  it('success 结果的输出含 branch 和 worktree 路径 + review 提示', async () => {
+    const cfg = parseConfig({});
+    const watcher = { snapshot: async () => fakeSnapshot(now) };
+    const curator = new Curator({
+      strategies: [{ name: 'fake', source: 'T1', discover: async () => [fakeTask()] }],
+    });
+    const stubRunner = {
+      execute: vi.fn().mockResolvedValue({
+        taskId: 'task-fake-001',
+        status: 'success',
+        branchName: 'idleloop/2026-05-13/abc123',
+        worktreePath: '/tmp/.idleloop/worktrees/task-fake-001',
+        baseBranch: 'main',
+        confidence: 'review_queue',
+        autoMerged: false,
+        tokensSpent: 100,
+        costUsd: 0.05,
+        durationMs: 1234,
+        diffLinesChanged: 10,
+        filesChanged: 2,
+        startedAt: now.toISOString(),
+        finishedAt: now.toISOString(),
+      }),
+    } as unknown as Runner;
+
+    const lines: string[] = [];
+    await runRun(
+      {},
+      {
+        config: cfg,
+        watcher,
+        curator,
+        runner: stubRunner,
+        activity: idleActivity,
+        print: (m) => lines.push(m),
+        shiftLog: false,
+      },
+    );
+
+    const all = lines.join('\n');
+    expect(all).toContain('idleloop/2026-05-13/abc123');
+    expect(all).toContain('/tmp/.idleloop/worktrees/task-fake-001');
+    expect(all).toMatch(/idleloop review/);
+  });
+
+  it('auto_merge 成功后输出含 auto-merged 标签', async () => {
+    const cfg = parseConfig({});
+    const watcher = { snapshot: async () => fakeSnapshot(now) };
+    const curator = new Curator({
+      strategies: [
+        {
+          name: 'fake',
+          source: 'T1',
+          discover: async () => [{ ...fakeTask(), confidence: 'auto_merge' as const }],
+        },
+      ],
+    });
+    const stubRunner = {
+      execute: vi.fn().mockResolvedValue({
+        taskId: 'task-auto-001',
+        status: 'success',
+        branchName: 'idleloop/2026-05-13/auto',
+        worktreePath: '/tmp/.idleloop/worktrees/task-auto-001',
+        baseBranch: 'main',
+        confidence: 'auto_merge',
+        autoMerged: true,
+        tokensSpent: 100,
+        costUsd: 0.02,
+        durationMs: 100,
+        diffLinesChanged: 1,
+        filesChanged: 1,
+        startedAt: now.toISOString(),
+        finishedAt: now.toISOString(),
+      }),
+    } as unknown as Runner;
+
+    const lines: string[] = [];
+    await runRun(
+      {},
+      {
+        config: cfg,
+        watcher,
+        curator,
+        runner: stubRunner,
+        activity: idleActivity,
+        print: (m) => lines.push(m),
+        shiftLog: false,
+      },
+    );
+
+    const all = lines.join('\n');
+    expect(all).toMatch(/auto-merged into main/);
+  });
+
   it('队列空时不调用 runner', async () => {
     const cfg = parseConfig({});
     const watcher = { snapshot: async () => fakeSnapshot(now) };

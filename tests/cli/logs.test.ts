@@ -115,4 +115,83 @@ describe('runLogs', () => {
     expect(r.availableDates).toContain('2026-05-13');
     expect(out.join('\n')).toMatch(/all blocked/);
   });
+
+  it('默认隐藏 blocked-only shift（只要还有 triggered shift）', async () => {
+    // 一天里 1 个 triggered + 3 个 blocked
+    const date = '2026-05-13';
+    const writer = new ShiftLogWriter({ rootDir: `${root}/${date}` });
+    // 第一个 triggered
+    await writer.record({
+      startedAt: new Date(2026, 4, 13, 3, 0, 0),
+      finishedAt: new Date(2026, 4, 13, 3, 0, 5),
+      decision: { triggered: true, reason: 'ok' },
+      snapshot: null,
+      tasks: [],
+      results: [aResult({ taskId: 'task-real' })],
+      strategies: [],
+    });
+    // 3 个 blocked
+    for (let i = 0; i < 3; i++) {
+      await writer.record({
+        startedAt: new Date(2026, 4, 13, 9 + i, 0, 0),
+        finishedAt: new Date(2026, 4, 13, 9 + i, 0, 1),
+        decision: {
+          triggered: false,
+          reason: 'in quiet hours',
+          blockedBy: 'quiet_hours',
+        },
+        snapshot: null,
+        tasks: [],
+        results: [],
+        strategies: [],
+      });
+    }
+    await runLogs({ date }, { logsRoot: root, print });
+    const text = out.join('\n');
+    expect(text).toContain('task-real'); // triggered shift 任务可见
+    expect(text).not.toContain('quiet_hours'); // blocked shift 默认折叠掉
+    expect(text).toMatch(/3 blocked shift\(s\) hidden/);
+  });
+
+  it('--include-blocked 展开所有 blocked shift', async () => {
+    const date = '2026-05-13';
+    const writer = new ShiftLogWriter({ rootDir: `${root}/${date}` });
+    await writer.record({
+      startedAt: new Date(2026, 4, 13, 3, 0, 0),
+      finishedAt: new Date(2026, 4, 13, 3, 0, 5),
+      decision: { triggered: true, reason: 'ok' },
+      snapshot: null,
+      tasks: [],
+      results: [aResult()],
+      strategies: [],
+    });
+    await writer.record({
+      startedAt: new Date(2026, 4, 13, 9, 0, 0),
+      finishedAt: new Date(2026, 4, 13, 9, 0, 1),
+      decision: {
+        triggered: false,
+        reason: 'in quiet hours',
+        blockedBy: 'quiet_hours',
+      },
+      snapshot: null,
+      tasks: [],
+      results: [],
+      strategies: [],
+    });
+    await runLogs({ date, includeBlocked: true }, { logsRoot: root, print });
+    const text = out.join('\n');
+    expect(text).toContain('quiet_hours'); // 展开
+    expect(text).not.toMatch(/blocked shift\(s\) hidden/);
+  });
+
+  it('默认输出顶部含 roll-up（shift / triggered / blocked / ok-tasks / cost / tokens）', async () => {
+    await seed('2026-05-13', 1);
+    await runLogs({ date: '2026-05-13' }, { logsRoot: root, print });
+    const text = out.join('\n');
+    expect(text).toMatch(/1 total/);
+    expect(text).toMatch(/1 triggered/);
+    expect(text).toMatch(/0 blocked/);
+    expect(text).toMatch(/ok-tasks/);
+    expect(text).toMatch(/tokens/);
+  });
 });

@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import { TaskParseError } from '../curator/index.js';
 import { generateUnitForCurrentPlatform } from '../daemon/index.js';
 import { runAdd } from './commands/add.js';
+import { runConfigCheck } from './commands/config-check.js';
 import {
   runDaemonStart,
   runDaemonStatus,
@@ -16,6 +17,7 @@ import { runReview } from './commands/review.js';
 import { runRun } from './commands/run.js';
 import { formatHuman, formatJson, runStatus } from './commands/status.js';
 import { EXAMPLE_TASK_MD } from './commands/task-template.js';
+import { runWhy } from './commands/why.js';
 
 const program = new Command();
 
@@ -82,9 +84,13 @@ program
       console.log(`  → ${r.destPath}`);
     } catch (err) {
       if (err instanceof TaskParseError) {
-        console.error(`[idleloop] ${err.message}`);
+        const where = err.filePath ? ` in ${err.filePath}` : '';
+        console.error(`[idleloop] task rejected${where}`);
+        for (const line of err.message.split('\n')) {
+          console.error(`  ${line}`);
+        }
         console.error('');
-        console.error('Need an example? Run:');
+        console.error('Need a working example? Run:');
         console.error('  idleloop task template > my-task.md');
         process.exit(1);
       }
@@ -96,8 +102,17 @@ program
   .command('list')
   .description('List tasks currently in ~/idleloop/queue/.')
   .action(async () => {
-    const { tasks } = await runList();
-    console.log(formatListTable(tasks));
+    const r = await runList();
+    console.log(formatListTable(r));
+  });
+
+const config = program.command('config').description('Inspect or validate ~/idleloop/config.yml.');
+config
+  .command('check')
+  .description('Validate config.yml (zod schema) and print the effective settings.')
+  .action(async () => {
+    const r = await runConfigCheck();
+    if (!r.ok) process.exit(1);
   });
 
 const task = program.command('task').description('Task file helpers.');
@@ -152,6 +167,7 @@ program
   .option('--list', 'list all dates instead of showing a single day', false)
   .option('--raw', 'print shift.md verbatim', false)
   .option('--recent <n>', 'when --list, limit to most recent N days', (v) => parseInt(v, 10))
+  .option('--include-blocked', 'show blocked shifts (hidden by default to reduce noise)', false)
   .option('--json', 'machine-readable JSON output', false)
   .action(
     async (opts: {
@@ -159,6 +175,7 @@ program
       list: boolean;
       raw: boolean;
       recent?: number;
+      includeBlocked: boolean;
       json: boolean;
     }) => {
       await runLogs(opts);
@@ -250,6 +267,14 @@ daemon
       process.stderr.write(`\n`);
     }
     runDaemonUnit();
+  });
+
+program
+  .command('why')
+  .description('Explain whether the daemon would trigger right now, and why/why not.')
+  .action(async () => {
+    const r = await runWhy();
+    if (!r.triggered) process.exitCode = 2;
   });
 
 program

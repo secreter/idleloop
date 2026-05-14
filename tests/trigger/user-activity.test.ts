@@ -42,10 +42,12 @@ describe('user-activity', () => {
     expect(r?.toISOString()).toBe('2026-05-13T15:00:00.000Z');
   });
 
-  it('maxDepth=0 只看根目录自身', async () => {
+  it('maxDepth=0 只看根目录直接子文件，不进入子目录', async () => {
     await makeFile('proj/inner.jsonl', new Date('2030-01-01T00:00:00Z'));
+    await makeFile('top.jsonl', new Date('2026-05-13T08:00:00Z'));
     const r = await getMostRecentClaudeActivity({ dir: testDir, maxDepth: 0 });
-    expect(r).toBeInstanceOf(Date);
+    // 直接子文件被看到
+    expect(r?.toISOString()).toBe('2026-05-13T08:00:00.000Z');
     // 子目录里的 2030 文件不应该被看到
     expect(r!.getFullYear()).toBeLessThan(2030);
   });

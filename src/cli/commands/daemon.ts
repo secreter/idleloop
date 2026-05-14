@@ -9,7 +9,9 @@ import {
   writePidFile,
   type DaemonLoopResult,
 } from '../../daemon/index.js';
-import { loadConfig, type Config } from '../../storage/config.js';
+import { listShiftDates, loadLatestShiftState, type ShiftState } from '../../shift-log/index.js';
+import { ConfigNotFoundError, loadConfig, type Config } from '../../storage/config.js';
+import { isInQuietHours } from '../../trigger/policy.js';
 import { logger as rootLogger } from '../../utils/logger.js';
 
 const log = rootLogger.child({ mod: 'daemon-cli' });
@@ -158,15 +160,26 @@ async function defaultWaitForStop(pid: number, waitMs: number): Promise<boolean>
   return !isAlive(pid);
 }
 
+export interface RunDaemonStatusDeps extends RunDaemonDeps {
+  /** 测试注入：跳过 config 读盘 */
+  configLoader?: () => Promise<Config>;
+  /** 测试注入：跳过 shift log 读盘 */
+  loadLatestShift?: () => Promise<ShiftState | null>;
+  /** 测试注入：固定 now */
+  now?: () => Date;
+}
+
 /**
- * `idleloop daemon status` — 输出当前是否在跑 + 配置 + 上一次 shift 概览。
+ * `idleloop daemon status` — 输出当前是否在跑 + 上一次 shift 概览 + 当前 gate 状态 +
+ * 下次 poll 估算时刻。
  */
 export async function runDaemonStatus(
-  deps: RunDaemonDeps = {},
+  deps: RunDaemonStatusDeps = {},
 ): Promise<{ running: boolean; pid: number | null }> {
   const print = deps.print ?? ((s: string) => console.log(s));
   const pidFile = typeof deps.pidFile === 'string' ? deps.pidFile : undefined;
   const status = await readPidStatus(pidFile ? { pidFile } : {});
+
   if (status.alive) {
     print(styleText('green', `daemon running (pid ${status.pid})`));
   } else if (status.pid != null) {
@@ -174,7 +187,94 @@ export async function runDaemonStatus(
   } else {
     print(styleText('dim', `daemon not running (no pid file at ${status.pidFile})`));
   }
+
+  await printDaemonContext(print, deps);
+
   return { running: status.alive, pid: status.pid };
+}
+
+async function printDaemonContext(
+  print: (s: string) => void,
+  deps: RunDaemonStatusDeps,
+): Promise<void> {
+  const now = (deps.now ?? (() => new Date()))();
+
+  let config: Config | null = null;
+  try {
+    config = deps.configLoader ? await deps.configLoader() : await loadConfig();
+  } catch (err) {
+    if (!(err instanceof ConfigNotFoundError)) {
+      print(styleText('dim', `  config: failed to read (${(err as Error).message})`));
+    }
+    // 没 config 时其它信息也展示不出来，提前返回
+    return;
+  }
+
+  const latest = deps.loadLatestShift ? await deps.loadLatestShift() : await loadMostRecentShift();
+  if (latest) {
+    const started = new Date(latest.startedAt);
+    const ago = formatAgo(now.getTime() - started.getTime());
+    const triggeredCount = latest.results.filter((r) => r.status === 'success').length;
+    const tag = latest.decision.triggered
+      ? styleText('green', '✓ triggered')
+      : styleText('dim', `· blocked[${latest.decision.blockedBy ?? 'n/a'}]`);
+    print(
+      `  last shift: ${tag}  ${formatLocalTime(started)} (${ago} ago) · ` +
+        `${triggeredCount} ok / ${latest.results.length} total · $${latest.totalCostUsd.toFixed(2)}`,
+    );
+  } else {
+    print(styleText('dim', '  last shift: (none recorded yet)'));
+  }
+
+  const gateLine = describeGate(config, now);
+  print(`  gate: ${gateLine}`);
+
+  const intervalMin = config.watcher.poll_interval_minutes;
+  print(
+    styleText(
+      'dim',
+      `  poll interval: ${intervalMin}min · next poll: ~${intervalMin}min after last (no exact timer available)`,
+    ),
+  );
+}
+
+async function loadMostRecentShift(): Promise<ShiftState | null> {
+  const dates = await listShiftDates();
+  for (const date of dates) {
+    const s = await loadLatestShiftState(date);
+    if (s) return s;
+  }
+  return null;
+}
+
+function describeGate(config: Config, now: Date): string {
+  if (config.trigger.quiet_hours && isInQuietHours(now, config.trigger.quiet_hours)) {
+    const end = config.trigger.quiet_hours.end;
+    return styleText('yellow', `quiet_hours active (lifts at ${String(end).padStart(2, '0')}:00)`);
+  }
+  if (config.trigger.system_idle?.enabled) {
+    return styleText(
+      'green',
+      `open (system_idle bypass available after ${config.trigger.system_idle.min_minutes}min afk)`,
+    );
+  }
+  return styleText('green', 'open (no quiet_hours match; pending policy + activity checks)');
+}
+
+function formatAgo(ms: number): string {
+  if (ms < 0) return 'just now';
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3600_000) return `${Math.round(ms / 60_000)}min`;
+  if (ms < 86_400_000) return `${(ms / 3600_000).toFixed(1)}h`;
+  return `${(ms / 86_400_000).toFixed(1)}d`;
+}
+
+function formatLocalTime(d: Date): string {
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${month}-${day} ${hh}:${mm}`;
 }
 
 /**

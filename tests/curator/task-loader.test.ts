@@ -78,6 +78,101 @@ body
     expect(() => parseTaskMarkdown(md)).toThrow(TaskParseError);
   });
 
+  it('cost_estimate_tokens 写成字符串 → 错误消息带 received 值和提示', () => {
+    const md = `---
+id: t-1
+source: T1
+project: foo
+title: T
+working_dir: /tmp/foo
+cost_estimate_tokens: "5k"
+---
+
+body
+`;
+    let thrown: TaskParseError | null = null;
+    try {
+      parseTaskMarkdown(md);
+    } catch (e) {
+      thrown = e as TaskParseError;
+    }
+    expect(thrown).toBeInstanceOf(TaskParseError);
+    const msg = thrown!.message;
+    expect(msg).toContain('cost_estimate_tokens');
+    expect(msg).toContain('"5k"'); // received 值预览
+    expect(msg).toMatch(/plain number/); // 改进提示
+  });
+
+  it('working_dir 空串 → 错误消息含字段名', () => {
+    const md = `---
+id: t-1
+source: T1
+project: foo
+title: T
+working_dir: ""
+cost_estimate_tokens: 1000
+---
+
+body
+`;
+    let thrown: TaskParseError | null = null;
+    try {
+      parseTaskMarkdown(md);
+    } catch (e) {
+      thrown = e as TaskParseError;
+    }
+    expect(thrown).toBeInstanceOf(TaskParseError);
+    expect(thrown!.message).toContain('working_dir');
+  });
+
+  it('working_dir 写成 "~/foo" → 错误提示提醒展开（用引号防止 YAML 解析 ~ 为 null）', () => {
+    // 用 quoted string 让 YAML 不把 ~ 当 null
+    // working_dir: "~/foo" 在 zod 里是合法的（非空字符串），不会报错
+    const md = `---
+id: t-1
+source: T1
+project: foo
+title: T
+working_dir: "~/foo"
+cost_estimate_tokens: "5k"
+---
+
+body
+`;
+    // 这次靠 cost_estimate_tokens 触发错误，验证错误消息含字段提示
+    let thrown: TaskParseError | null = null;
+    try {
+      parseTaskMarkdown(md);
+    } catch (e) {
+      thrown = e as TaskParseError;
+    }
+    expect(thrown).toBeInstanceOf(TaskParseError);
+    expect(thrown!.message).toMatch(/plain number/);
+  });
+
+  it('source 拼写错误 → 提示合法枚举值', () => {
+    const md = `---
+id: t-1
+source: t1
+project: foo
+title: T
+working_dir: /tmp/foo
+cost_estimate_tokens: 1000
+---
+
+body
+`;
+    let thrown: TaskParseError | null = null;
+    try {
+      parseTaskMarkdown(md);
+    } catch (e) {
+      thrown = e as TaskParseError;
+    }
+    expect(thrown).toBeInstanceOf(TaskParseError);
+    expect(thrown!.message).toContain('source');
+    expect(thrown!.message).toMatch(/T1, T2, T3, T4/);
+  });
+
   it('缺 id 时自动生成 task-ULID', () => {
     const md = `---
 source: T1

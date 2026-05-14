@@ -48,6 +48,8 @@ export interface RunDeps {
   activity?: ActivityChecker;
   /** 静默 console 输出（测试用） */
   silent?: boolean;
+  /** 显式注入 print 函数（测试可断言输出内容；优先级高于 silent） */
+  print?: (msg: string) => void;
   /** 显式注入 shift log writer。传 false 完全禁用（测试默认） */
   shiftLog?: ShiftLogWriter | false;
 }
@@ -66,7 +68,7 @@ export interface RunDeps {
 export async function runRun(opts: RunRunOptions = {}, deps: RunDeps = {}): Promise<RunSummary> {
   const startedAt = new Date();
   const config = deps.config ?? (await loadConfig());
-  const log = deps.silent ? () => {} : (m: string) => console.log(m);
+  const log: LogFn = deps.print ?? (deps.silent ? () => {} : (m: string) => console.log(m));
 
   const rawWatcher = deps.watcher ?? new Watcher();
   let snapshot: QuotaSnapshot | null = null;
@@ -347,6 +349,7 @@ function printResult(r: TaskResult, log: LogFn): void {
     aborted_oversized: (s) => styleText('yellow', s),
     aborted_budget: (s) => styleText('yellow', s),
     aborted_forbidden_path: (s) => styleText('red', s),
+    aborted_secret_leak: (s) => styleText('red', s),
     error: (s) => styleText('red', s),
   };
   const colorize = colorFor[r.status] ?? ((s: string) => s);
@@ -354,4 +357,27 @@ function printResult(r: TaskResult, log: LogFn): void {
     `  ${colorize(`[${r.status}]`)} tokens=${r.tokensSpent} cost=$${r.costUsd.toFixed(4)} diff=${r.diffLinesChanged}L/${r.filesChanged}f duration=${r.durationMs}ms`,
   );
   if (r.errorMessage) log(styleText('dim', `    ${r.errorMessage}`));
+
+  // 保留 worktree 的状态（success / verify_failed / dry_run）值得告诉用户路径，
+  // 否则就得查 shift log。aborted_* 已经删了 worktree，没必要展示。
+  const keepsWorktree =
+    r.status === 'success' || r.status === 'verify_failed' || r.status === 'dry_run';
+  if (keepsWorktree && r.branchName && r.worktreePath) {
+    log(styleText('dim', `    branch: ${r.branchName}`));
+    log(styleText('dim', `    worktree: ${r.worktreePath}`));
+  }
+  if (r.status === 'success') {
+    if (r.autoMerged) {
+      log(styleText('green', `    ✓ auto-merged into ${r.baseBranch ?? 'baseBranch'}`));
+    } else if (r.confidence === 'auto_merge') {
+      log(
+        styleText(
+          'yellow',
+          `    ! auto-merge skipped (source repo dirty?); kept for manual review`,
+        ),
+      );
+    } else {
+      log(styleText('dim', `    next: idleloop review`));
+    }
+  }
 }

@@ -19,6 +19,15 @@ describe('runList', () => {
     expect(r.tasks).toEqual([]);
   });
 
+  it('空队列下，扫到 *.template 文件作为模板提示返回', async () => {
+    await writeFile(path.join(dir, 'example.md.template'), '---\nid: t\n---\nbody');
+    await writeFile(path.join(dir, 'another.md.example'), '---\nid: t\n---\nbody');
+    const r = await runList({ queueDir: dir });
+    expect(r.tasks).toEqual([]);
+    expect(r.templates.sort()).toEqual(['another.md.example', 'example.md.template']);
+    expect(r.queueDir).toBe(dir);
+  });
+
   it('多个 md 按字典序返回', async () => {
     const writeTask = async (name: string, id: string) => {
       await writeFile(
@@ -64,6 +73,24 @@ describe('formatListTable', () => {
 
   it('空数组返回提示', () => {
     expect(formatListTable([])).toBe('(no tasks in queue)');
+  });
+
+  it('空 + 模板文件存在时给出 mv 指引', () => {
+    const out = formatListTable({
+      tasks: [],
+      templates: ['example.md.template'],
+      queueDir: '/q',
+    });
+    expect(out).toContain('(no tasks in queue)');
+    expect(out).toContain('example.md.template');
+    expect(out).toContain('mv ');
+    expect(out).toContain('/q/example.md');
+  });
+
+  it('空 + 无模板时给出 getting-started 提示', () => {
+    const out = formatListTable({ tasks: [], templates: [], queueDir: '/q' });
+    expect(out).toContain('idleloop task template');
+    expect(out).toContain('idleloop add');
   });
 
   it('含表头和数据行', () => {
