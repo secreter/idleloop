@@ -126,6 +126,47 @@ describe('Runner', () => {
     expect(result.errorMessage).toMatch(/\.env/);
   });
 
+  it('secret leak（AWS key in diff）→ aborted_secret_leak', async () => {
+    const claudeRunner = vi.fn().mockImplementation(async (opts: { worktreePath: string }) => {
+      await writeFile(
+        path.join(opts.worktreePath, 'hello.txt'),
+        'hi\n// const k = "AKIAIOSFODNN7EXAMPLE";\n',
+      );
+      return {
+        exitCode: 0,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCostUsd: 0,
+        rawLog: '',
+      };
+    });
+    const runner = new Runner({ claudeRunner });
+    const result = await runner.execute(task(), { sourceRepoDir: sourceRepo });
+    expect(result.status).toBe('aborted_secret_leak');
+    expect(result.errorMessage).toMatch(/secret-like|aws_access_key/);
+  });
+
+  it('hardened defaults：写 .ssh/config 被默认 forbidden 拒绝（即使 task 没显式列）', async () => {
+    const claudeRunner = vi.fn().mockImplementation(async (opts: { worktreePath: string }) => {
+      const { mkdir } = await import('node:fs/promises');
+      await mkdir(path.join(opts.worktreePath, '.ssh'), { recursive: true });
+      await writeFile(path.join(opts.worktreePath, '.ssh', 'config'), 'Host *\n');
+      return {
+        exitCode: 0,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCostUsd: 0,
+        rawLog: '',
+      };
+    });
+    const runner = new Runner({ claudeRunner });
+    // task 的 forbidden_paths 是空列表，但 DEFAULT_FORBIDDEN_PATHS 应该兜底
+    const taskNoForbidden = task({ safety: { max_diff_lines: 50, forbidden_paths: [] } });
+    const result = await runner.execute(taskNoForbidden, { sourceRepoDir: sourceRepo });
+    expect(result.status).toBe('aborted_forbidden_path');
+    expect(result.errorMessage).toMatch(/\.ssh/);
+  });
+
   it('verify 失败时 status=verify_failed', async () => {
     const claudeRunner = vi.fn().mockImplementation(async (opts: { worktreePath: string }) => {
       // claude 故意没创建 hello.txt，verify 会失败

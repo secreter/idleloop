@@ -40,6 +40,7 @@ export const paths = {
   shiftStateJson: (date: string) => path.join(stateRoot(), 'logs', date, 'state.json'),
   claudeOutputLog: (date: string) => path.join(stateRoot(), 'logs', date, 'claude-output.log'),
   daemonLog: () => path.join(stateRoot(), 'logs', 'daemon.log'),
+  auditJsonl: () => path.join(stateRoot(), 'audit.jsonl'),
 
   // Claude Code 自己的目录（只读用）
   claudeCredentials: () => path.join(homedir(), '.claude', '.credentials.json'),

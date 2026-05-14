@@ -2,7 +2,8 @@ import type { Config } from '../storage/config.js';
 import { logger as rootLogger } from '../utils/logger.js';
 import type { QuotaSnapshot } from '../watcher/types.js';
 import { evaluatePolicy, isInQuietHours } from './policy.js';
-import type { TriggerDecision, UserActivityCheck } from './types.js';
+import { detectSystemIdle, type DetectIdleOptions } from './system-idle.js';
+import type { SystemIdleCheck, TriggerDecision, UserActivityCheck } from './types.js';
 import { checkUserActivity } from './user-activity.js';
 
 const moduleLogger = rootLogger.child({ mod: 'trigger' });
@@ -15,11 +16,17 @@ export interface ActivityChecker {
   check(thresholdMinutes: number): Promise<UserActivityCheck>;
 }
 
+export interface SystemIdleChecker {
+  check(): Promise<SystemIdleCheck>;
+}
+
 export interface TriggerEngineOptions {
   config: Config['trigger'];
   watcher: SnapshotSource;
   /** 测试注入；默认用 ~/.claude/projects/ 扫 mtime */
   activity?: ActivityChecker;
+  /** 测试注入；默认用 xprintidle / loginctl / ioreg 探测 */
+  systemIdle?: SystemIdleChecker;
   /** 测试注入；默认 new Date() */
   now?: () => Date;
 }
@@ -29,6 +36,19 @@ const defaultActivity: ActivityChecker = {
     return checkUserActivity(thresholdMinutes);
   },
 };
+
+function defaultSystemIdleChecker(
+  minMinutes: number,
+  opts: DetectIdleOptions = {},
+): SystemIdleChecker {
+  return {
+    async check(): Promise<SystemIdleCheck> {
+      const r = await detectSystemIdle(opts);
+      const isAfk = r.idleMs >= 0 && r.idleMs >= minMinutes * 60_000;
+      return { idleMs: r.idleMs, source: r.source, isAfk };
+    },
+  };
+}
 
 /**
  * 触发决策引擎。
@@ -46,7 +66,27 @@ export class TriggerEngine {
   async shouldTrigger(): Promise<TriggerDecision> {
     const now = (this.opts.now ?? (() => new Date()))();
 
-    if (this.opts.config.quiet_hours) {
+    // 先做系统级 afk 检测：用户离开电脑足够久就 bypass quiet_hours + user_activity，
+    // 但仍受 policies 约束（余量得满足）。
+    const sysIdleConfig = this.opts.config.system_idle;
+    let afk = false;
+    if (sysIdleConfig?.enabled) {
+      const checker = this.opts.systemIdle ?? defaultSystemIdleChecker(sysIdleConfig.min_minutes);
+      try {
+        const r = await checker.check();
+        afk = r.isAfk;
+        if (afk) {
+          moduleLogger.debug(
+            { idleMs: r.idleMs, source: r.source },
+            'system idle detected; bypassing quiet_hours + user_activity',
+          );
+        }
+      } catch (err) {
+        moduleLogger.debug({ err: (err as Error).message }, 'system-idle check failed; continuing');
+      }
+    }
+
+    if (!afk && this.opts.config.quiet_hours) {
       if (isInQuietHours(now, this.opts.config.quiet_hours)) {
         return {
           triggered: false,
@@ -68,15 +108,17 @@ export class TriggerEngine {
       };
     }
 
-    const activity = await (this.opts.activity ?? defaultActivity).check(
-      this.opts.config.user_activity_guard_minutes,
-    );
-    if (activity.active) {
-      return {
-        triggered: false,
-        reason: `user active ${activity.minutesSince?.toFixed(0) ?? '?'} minutes ago`,
-        blockedBy: 'user_activity',
-      };
+    if (!afk) {
+      const activity = await (this.opts.activity ?? defaultActivity).check(
+        this.opts.config.user_activity_guard_minutes,
+      );
+      if (activity.active) {
+        return {
+          triggered: false,
+          reason: `user active ${activity.minutesSince?.toFixed(0) ?? '?'} minutes ago`,
+          blockedBy: 'user_activity',
+        };
+      }
     }
 
     const policyReasons: string[] = [];
@@ -105,4 +147,5 @@ export class TriggerEngine {
 
 export { evaluatePolicy, isInQuietHours } from './policy.js';
 export { checkUserActivity, getMostRecentClaudeActivity } from './user-activity.js';
-export type { TriggerDecision, UserActivityCheck } from './types.js';
+export { detectSystemIdle } from './system-idle.js';
+export type { TriggerDecision, UserActivityCheck, SystemIdleCheck } from './types.js';

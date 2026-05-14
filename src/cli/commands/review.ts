@@ -1,6 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { styleText } from 'node:util';
 import simpleGit from 'simple-git';
+import { auditWriter as defaultAuditWriter, type AuditWriter } from '../../audit/index.js';
 import { listShiftDates, loadShiftsForDate } from '../../shift-log/index.js';
 import { removeWorktree } from '../../runner/index.js';
 import { paths } from '../../storage/paths.js';
@@ -43,6 +44,8 @@ export interface RunReviewDeps {
   applyAction?: (action: ReviewAction, c: ReviewCandidate) => Promise<ReviewActionResult>;
   /** y/N 二次确认实现，默认走 @inquirer/prompts confirm */
   confirm?: (msg: string) => Promise<boolean>;
+  /** 测试注入：自定义 audit writer */
+  audit?: AuditWriter;
 }
 
 export interface PromptInput {
@@ -169,6 +172,29 @@ export async function runReview(
     print(tag);
     print('');
     applied.push({ candidate: c, result });
+
+    // 审计
+    const audit = deps.audit ?? defaultAuditWriter;
+    if (result.ok) {
+      const kindMap: Record<string, 'review_merged' | 'review_discarded' | 'review_kept'> = {
+        merge: 'review_merged',
+        discard: 'review_discarded',
+        keep: 'review_kept',
+      };
+      const kind = kindMap[result.action];
+      if (kind) {
+        await audit.write({
+          kind,
+          subject: c.result.taskId,
+          detail: {
+            branch: c.result.branchName,
+            baseBranch: c.result.baseBranch,
+            shiftId: c.shiftId,
+            date: c.date,
+          },
+        });
+      }
+    }
   }
 
   return { candidates, applied };

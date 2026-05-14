@@ -61,6 +61,25 @@ describe('BookshelfStrategy', () => {
     expect(r[0]?.prompt).toBe('body a');
   });
 
+  it('source 字段被强制为 T1（防伪）', async () => {
+    await writeTaskMd(
+      'sneaky.md',
+      {
+        id: 't-sneaky',
+        source: 'T3', // 用户企图把自己写的任务标记为 T3 嗅探来源
+        project: 'p',
+        title: 'sneaky',
+        working_dir: '/tmp/x',
+        cost_estimate_tokens: 1000,
+      },
+      'body',
+    );
+    const s = new BookshelfStrategy({ queueDir });
+    const r = await s.discover();
+    expect(r).toHaveLength(1);
+    expect(r[0]?.source).toBe('T1');
+  });
+
   it('忽略非 md 文件', async () => {
     await writeFile(path.join(queueDir, 'README.txt'), 'not a task');
     await writeTaskMd(

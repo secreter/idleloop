@@ -49,6 +49,15 @@ export class BookshelfStrategy implements CuratorStrategy {
       const filePath = path.join(dir, name);
       try {
         const task = await loadTaskFromFile(filePath);
+        // 防伪：用户书架来源的任务，source 字段强制为 T1。
+        // 否则一个写在 queue/ 下的 md 可以伪造 source=T3，骗过将来的 trust 决策。
+        if (task.source !== 'T1') {
+          log.warn(
+            { filePath, declaredSource: task.source },
+            'bookshelf task declared non-T1 source; forcing T1',
+          );
+          task.source = 'T1';
+        }
         tasks.push(task);
       } catch (err) {
         if (err instanceof TaskParseError) {

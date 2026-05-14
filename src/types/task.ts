@@ -1,5 +1,6 @@
 import { ulid } from 'ulid';
 import { z } from 'zod';
+import { DEFAULT_FORBIDDEN_PATHS } from './forbidden.js';
 
 /**
  * 任务定义。Task md 文件的 frontmatter 字段 + body（作为 prompt）。
@@ -24,11 +25,12 @@ export const TaskSchema = z.object({
   safety: z
     .object({
       max_diff_lines: z.number().int().positive().default(800),
-      forbidden_paths: z.array(z.string()).default(['.env', 'secrets/']),
+      /** 用户传的列表会和 DEFAULT_FORBIDDEN_PATHS 取并集，无法削弱默认值。 */
+      forbidden_paths: z.array(z.string()).default([...DEFAULT_FORBIDDEN_PATHS]),
     })
     .default({
       max_diff_lines: 800,
-      forbidden_paths: ['.env', 'secrets/'],
+      forbidden_paths: [...DEFAULT_FORBIDDEN_PATHS],
     }),
   added_at: z.string().optional(),
 });
@@ -44,6 +46,7 @@ export type TaskStatus =
   | 'aborted_oversized'
   | 'aborted_budget'
   | 'aborted_forbidden_path'
+  | 'aborted_secret_leak'
   | 'error'
   | 'dry_run';
 

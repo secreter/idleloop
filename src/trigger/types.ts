@@ -6,6 +6,15 @@ export type TriggerBlockReason =
   | 'policies_not_satisfied'
   | 'invalid_snapshot';
 
+export interface SystemIdleCheck {
+  /** 系统已闲置毫秒；-1 = 探测失败 */
+  idleMs: number;
+  /** 来源命令（xprintidle / loginctl / ioreg / unknown） */
+  source: string;
+  /** 是否达到 afk 阈值（用来 bypass quiet_hours 和 user_activity） */
+  isAfk: boolean;
+}
+
 export interface TriggerDecision {
   triggered: boolean;
   reason: string;

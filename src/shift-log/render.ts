@@ -118,6 +118,7 @@ function headline(state: ShiftState): string {
     aborted_oversized: 0,
     aborted_budget: 0,
     aborted_forbidden_path: 0,
+    aborted_secret_leak: 0,
     error: 0,
     dry_run: 0,
   };
@@ -127,12 +128,13 @@ function headline(state: ShiftState): string {
   parts.push(`Tasks: ${state.results.length}`);
   if (buckets.success > 0) parts.push(`success=${buckets.success}`);
   if (buckets.verify_failed > 0) parts.push(`verify_failed=${buckets.verify_failed}`);
-  if (buckets.aborted_oversized + buckets.aborted_budget + buckets.aborted_forbidden_path > 0) {
-    parts.push(
-      `aborted=${
-        buckets.aborted_oversized + buckets.aborted_budget + buckets.aborted_forbidden_path
-      }`,
-    );
+  const totalAborted =
+    buckets.aborted_oversized +
+    buckets.aborted_budget +
+    buckets.aborted_forbidden_path +
+    buckets.aborted_secret_leak;
+  if (totalAborted > 0) {
+    parts.push(`aborted=${totalAborted}`);
   }
   if (buckets.error > 0) parts.push(`error=${buckets.error}`);
   if (buckets.dry_run > 0) parts.push(`dry_run=${buckets.dry_run}`);

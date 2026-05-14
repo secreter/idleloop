@@ -1,4 +1,5 @@
 import simpleGit from 'simple-git';
+import { auditWriter as defaultAuditWriter, type AuditWriter } from '../audit/index.js';
 import { paths, todayDateString } from '../storage/paths.js';
 import type { Task, TaskResult, TaskStatus } from '../types/task.js';
 import { logger as rootLogger } from '../utils/logger.js';
@@ -16,6 +17,8 @@ export interface RunnerOptions {
   verifyTimeoutMs?: number;
   /** 测试注入：自定义 claude 启动函数（绕过真实 spawn） */
   claudeRunner?: typeof runClaude;
+  /** 测试注入：自定义 audit writer；默认走 ~/.idleloop/audit.jsonl */
+  audit?: AuditWriter;
 }
 
 export interface RunOptions {
@@ -41,6 +44,48 @@ export class Runner {
   constructor(private readonly opts: RunnerOptions = {}) {}
 
   async execute(task: Task, runOpts: RunOptions = {}): Promise<TaskResult> {
+    const audit = this.opts.audit ?? defaultAuditWriter;
+    await audit.write({
+      kind: 'task_started',
+      subject: task.id,
+      detail: {
+        title: task.title,
+        project: task.project,
+        confidence: task.confidence,
+        dry: runOpts.dry === true,
+      },
+    });
+    const result = await this.executeInner(task, runOpts);
+    await audit.write({
+      kind: 'task_finished',
+      subject: task.id,
+      detail: {
+        status: result.status,
+        autoMerged: result.autoMerged ?? false,
+        costUsd: result.costUsd,
+        diffLines: result.diffLinesChanged,
+        filesChanged: result.filesChanged,
+        durationMs: result.durationMs,
+      },
+    });
+    if (result.status.startsWith('aborted_')) {
+      await audit.write({
+        kind: 'safety_blocked',
+        subject: task.id,
+        detail: { status: result.status, error: result.errorMessage },
+      });
+    }
+    if (result.autoMerged) {
+      await audit.write({
+        kind: 'auto_merged',
+        subject: task.id,
+        detail: { branch: result.branchName, baseBranch: result.baseBranch },
+      });
+    }
+    return result;
+  }
+
+  private async executeInner(task: Task, runOpts: RunOptions = {}): Promise<TaskResult> {
     const startedAt = new Date();
     const date = todayDateString(startedAt);
     const shortId = task.id.replace(/^task-/, '').slice(-12);
@@ -115,7 +160,9 @@ export class Runner {
             ? 'aborted_oversized'
             : safety.reason === 'forbidden_path'
               ? 'aborted_forbidden_path'
-              : 'aborted_oversized'; // lockfile 走 oversized 桶；具体原因在 detail 里
+              : safety.reason === 'secret_leak'
+                ? 'aborted_secret_leak'
+                : 'aborted_oversized'; // lockfile 走 oversized 桶；具体原因在 detail 里
         await removeWorktree(handle, { force: true, deleteBranch: true });
         return finalize(
           task,

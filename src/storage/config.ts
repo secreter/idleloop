@@ -51,6 +51,15 @@ const WatcherSchema = z
     fallback_to_cli: true,
   });
 
+const SystemIdleSchema = z
+  .object({
+    /** 是否启用「系统级闲置探测」让 idleloop 在白天 quiet_hours 内也能触发 */
+    enabled: z.boolean().default(false),
+    /** 多少分钟没碰键鼠才算 afk（默认 30）。命中后 bypass quiet_hours + user_activity */
+    min_minutes: z.number().int().positive().default(30),
+  })
+  .default({ enabled: false, min_minutes: 30 });
+
 const TriggerSchema = z
   .object({
     policies: z.array(TriggerPolicySchema).default([
@@ -59,6 +68,7 @@ const TriggerSchema = z
     ]),
     quiet_hours: QuietHoursSchema.nullable().default({ start: 8, end: 22 }),
     user_activity_guard_minutes: z.number().int().nonnegative().default(30),
+    system_idle: SystemIdleSchema,
   })
   .default({
     policies: [
@@ -67,6 +77,7 @@ const TriggerSchema = z
     ],
     quiet_hours: { start: 8, end: 22 },
     user_activity_guard_minutes: 30,
+    system_idle: { enabled: false, min_minutes: 30 },
   });
 
 const RunnerSchema = z
@@ -143,6 +154,12 @@ trigger:
 
   # 最近 N 分钟内有 Claude Code 活动则跳过本次触发
   user_activity_guard_minutes: 30
+
+  # 系统级闲置探测：让白天用户离开电脑超过 N 分钟时也能跑（bypass quiet_hours）
+  # Linux 用 xprintidle / loginctl；macOS 用 ioreg。任意一个能跑就行。
+  system_idle:
+    enabled: false        # 默认关；启用前先确认 idleloop status 能正确探测
+    min_minutes: 30
 
 runner:
   max_concurrent_tasks: 1

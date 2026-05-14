@@ -12,6 +12,7 @@ function defaultTriggerConfig(): Config['trigger'] {
     ],
     quiet_hours: { start: 8, end: 22 },
     user_activity_guard_minutes: 30,
+    system_idle: { enabled: false, min_minutes: 30 },
   };
 }
 
@@ -139,6 +140,62 @@ describe('TriggerEngine', () => {
     expect(d.triggered).toBe(false);
     expect(d.blockedBy).toBe('invalid_snapshot');
     expect(d.reason).toMatch(/network down/);
+  });
+
+  it('system_idle.enabled + afk：白天 quiet_hours 内也能触发', async () => {
+    // 12pm，本来 quiet_hours 8-22 应该挡住
+    const now = new Date(2026, 4, 13, 12, 0, 0);
+    const cfg = defaultTriggerConfig();
+    cfg.system_idle = { enabled: true, min_minutes: 30 };
+    const engine = new TriggerEngine({
+      config: cfg,
+      watcher: fakeWatcher(snapAt(now, 30, 50)),
+      activity: fakeActivity({ active: true, lastActivityAt: new Date(), minutesSince: 1 }), // 即使 active 也 bypass
+      systemIdle: {
+        check: async () => ({ idleMs: 45 * 60_000, source: 'xprintidle', isAfk: true }),
+      },
+      now: () => now,
+    });
+    const d = await engine.shouldTrigger();
+    expect(d.triggered).toBe(true);
+    expect(d.windowType).toBe('five_hour');
+  });
+
+  it('system_idle.enabled 但 isAfk=false：仍受 quiet_hours 拦截', async () => {
+    const now = new Date(2026, 4, 13, 12, 0, 0);
+    const cfg = defaultTriggerConfig();
+    cfg.system_idle = { enabled: true, min_minutes: 30 };
+    const engine = new TriggerEngine({
+      config: cfg,
+      watcher: fakeWatcher(snapAt(now, 30, 50)),
+      activity: fakeActivity(inactive),
+      systemIdle: {
+        check: async () => ({ idleMs: 5 * 60_000, source: 'xprintidle', isAfk: false }),
+      },
+      now: () => now,
+    });
+    const d = await engine.shouldTrigger();
+    expect(d.triggered).toBe(false);
+    expect(d.blockedBy).toBe('quiet_hours');
+  });
+
+  it('system_idle.enabled=false：完全忽略 afk，走标准流程', async () => {
+    const now = new Date(2026, 4, 13, 12, 0, 0);
+    const cfg = defaultTriggerConfig();
+    cfg.system_idle = { enabled: false, min_minutes: 30 };
+    const engine = new TriggerEngine({
+      config: cfg,
+      watcher: fakeWatcher(snapAt(now, 30, 50)),
+      activity: fakeActivity(inactive),
+      // 即使探测说 afk，也不应该 bypass
+      systemIdle: {
+        check: async () => ({ idleMs: 60 * 60_000, source: 'xprintidle', isAfk: true }),
+      },
+      now: () => now,
+    });
+    const d = await engine.shouldTrigger();
+    expect(d.triggered).toBe(false);
+    expect(d.blockedBy).toBe('quiet_hours');
   });
 
   it('多 policy：第二个 policy 命中', async () => {

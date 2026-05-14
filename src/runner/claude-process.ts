@@ -30,6 +30,7 @@ export interface ClaudeRunResult {
  * 命令构成（见 docs/IMPLEMENTATION_PLAN.md §2.2）：
  *   claude --print
  *          --output-format stream-json
+ *          --verbose                     ← stream-json + --print 要求 verbose
  *          --include-partial-messages
  *          --input-format text
  *          --add-dir <worktreePath>
@@ -37,10 +38,9 @@ export interface ClaudeRunResult {
  *          --max-budget-usd <budget>
  *          --dangerously-skip-permissions
  *          --no-session-persistence
- *          --bare
  *
- * Phase 1 starter：本函数实现了完整启动 + stream 解析逻辑，但 dry-run 模式由
- * Runner 决定是否调用本函数。真实多任务联调留到 Phase 2。
+ * 注意：不能用 `--bare`，那会跳过 OAuth/keychain 读取，强制要求 ANTHROPIC_API_KEY，
+ * 与 idleloop 使用 ~/.claude/.credentials.json 的设计冲突。
  */
 export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult> {
   const cli = opts.cliPath ?? 'claude';
@@ -49,6 +49,7 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
     '--print',
     '--output-format',
     'stream-json',
+    '--verbose',
     '--include-partial-messages',
     '--input-format',
     'text',
@@ -60,7 +61,6 @@ export async function runClaude(opts: ClaudeRunOptions): Promise<ClaudeRunResult
     String(opts.budgetUsd),
     '--dangerously-skip-permissions',
     '--no-session-persistence',
-    '--bare',
   ];
   if (opts.model) args.push('--model', opts.model);
 
